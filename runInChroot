@@ -1,0 +1,208 @@
+#!/bin/bash
+# Authors : Simon Peter, Ismael Barros² <ismael@barros2.org>
+# License : BSD http://en.wikipedia.org/wiki/BSD_license
+
+set -e
+# set -x
+
+HERE=$(dirname $(readlink -f "${0}"))
+export PATH=$HERE:$PATH
+
+opt_shell=
+while getopts "s" arg; do
+	case $arg in
+	s)
+		opt_shell=1
+		shift $((OPTIND-1))
+		;;
+      esac
+done
+
+
+
+OSIMAGE="$1"
+APPIMAGE="$2"
+[ ! "$APPIMAGE" ] && [ -f AppRun ] && APPIMAGE=.
+
+usage() { echo "Usage: $0 <OS image> <AppImage|AppDir>"; }
+
+[ -n "$OSIMAGE" ] || { usage; exit 1; }
+[ -n "$APPIMAGE" ] || { usage; exit 1; }
+[ -e "$APPIMAGE" ] || { echo "$APPIMAGE doesn't exist"; exit 1; }
+[ -d "$APPIMAGE" ] && [ -f "$APPIMAGE/AppRun" ] && { echo "$APPIMAGE/AppRun doesn't exist"; exit 1; }
+
+WORKDIR="$(mktemp -d /tmp/runInChroot.XXXXXXXXXX)"
+MOUNTPOINT_UNION="$WORKDIR/union"
+MOUNTPOINT_UNIONFS="$WORKDIR/unionfs"
+MOUNTPOINT_ISO="$WORKDIR/iso"
+
+
+trap atexit EXIT
+atexit() {
+	set +e
+	echo "Cleaning up..."
+	sudo umount -l "$APPIMAGE"
+	sudo umount -l "$MOUNTPOINT_UNION/var/run"
+	sudo umount -l "$MOUNTPOINT_UNION/var/lib/dbus"
+	sudo umount -l "$MOUNTPOINT_UNION/etc/resolv.conf"
+	sudo umount -l "$MOUNTPOINT_UNION/dev/pts"
+	sudo umount -l "$MOUNTPOINT_UNION/sys/"
+	sudo umount -l "$MOUNTPOINT_UNION/dev"
+	sudo umount -l "$MOUNTPOINT_UNION/proc"
+	#sudo umount "$MOUNTPOINT_UNION/boot"
+#	fusermount -u "$MOUNTPOINT_UNION/automake" 2>/dev/null # Puppy
+	#fusermount -u "$MOUNTPOINT_UNION"
+	sudo umount -l "$MOUNTPOINT_UNION"
+	killall unionfs # Just in case.
+	sudo umount -l "$MOUNTPOINT_UNIONFS/root" 2>/dev/null
+	fusermount -u "$MOUNTPOINT_ISO" 2>/dev/null
+	fusermount -u "$MOUNTPOINT_ISO" 2>/dev/null
+	fusermount -u "$MOUNTPOINT_ISO" 2>/dev/null
+	rmdir "$MOUNTPOINT_UNIONFS/root" || ls "$MOUNTPOINT_UNIONFS/root"
+	rm -rf "$MOUNTPOINT_UNIONFS/rw"
+	rmdir "$MOUNTPOINT_UNIONFS" || ls "$MOUNTPOINT_UNIONFS"
+	rmdir "$MOUNTPOINT_UNION" || ls "$MOUNTPOINT_UNION"
+	#rmdir "$MOUNTPOINT_ISO" || ls "$MOUNTPOINT_ISO"
+	rmdir "$WORKDIR" || ls "$WORKDIR"
+}
+
+
+mkdir -p "$MOUNTPOINT_UNIONFS/root" # Unionfs read-only
+mkdir -p "$MOUNTPOINT_UNIONFS/rw" # Unionfs rw
+mkdir -p "$MOUNTPOINT_UNION" # Overlay
+
+# If ISO was specified, then mount it and find contained filesystem
+if [ ${OSIMAGE##*.} == "iso" ] ; then
+	ISO="$OSIMAGE"
+
+	echo "Mounting ISO $ISO on $MOUNTPOINT_ISO"
+
+	#mkdir -p "$MOUNTPOINT_ISO"
+	#sudo mount -o loop,ro "$ISO" "$MOUNTPOINT_ISO"
+	fuseiso -p "$ISO" "$MOUNTPOINT_ISO" -o allow_other
+
+	# Ubuntu-like ISOs
+	if [ -e "$MOUNTPOINT_ISO/casper/filesystem.squashfs" ] ; then
+		SQUASHFS="$MOUNTPOINT_ISO/casper/filesystem.squashfs"
+
+	# Fedora-like ISOs
+	elif [ -e "$MOUNTPOINT_ISO/LiveOS/squashfs.img" ] ; then
+		SQUASHFS="$MOUNTPOINT_ISO/LiveOS/ext3fs.img"
+		#SQUASHFS="$MOUNTPOINT_ISO/LiveOS/squashfs.img"
+		#sudo mount -o loop,ro "$MOUNTPOINT_ISO/LiveOS/squashfs.img" "$MOUNTPOINT_ISO" || exit 1
+	
+	else
+		# OpenSUSE-like ISOs
+		openSuseSquash="$(ls -1 "$MOUNTPOINT_ISO"/openSUSE-*-livecd* | head -n1)"
+		if [ -e "$openSuseSquash" ] ; then
+			SQUASHFS="$openSuseSquash"
+			echo "Actually, OpenSUSE doesn't work for now, sorry!"
+			exit 1
+		else
+			echo "Unknown distro"
+			echo "Contents of $MOUNTPOINT_ISO:"
+			ls -l "$MOUNTPOINT_ISO"
+			exit 1
+		fi
+	fi
+else
+	SQUASHFS="$OSIMAGE"
+fi
+
+echo "Using SquashFS $SQUASHFS"
+sudo mount -o loop,ro "$SQUASHFS" "$MOUNTPOINT_UNIONFS/root" || exit 1
+
+#unionfs-fuse -o allow_other,use_ino,suid,dev,nonempty -ocow,chroot=$MOUNTPOINT_UNIONFS/,max_files=32768 /rw=RW:/root=RO $MOUNTPOINT_UNION
+unionfs -o allow_other,use_ino,suid,dev,nonempty -o cow "$MOUNTPOINT_UNIONFS/rw"=RW:"$MOUNTPOINT_UNIONFS/root"=RO "$MOUNTPOINT_UNION" || exit 1
+
+ls "$MOUNTPOINT_UNION/mnt" >/dev/null && MNT=/mnt
+#ls "$MOUNTPOINT_UNION/automake" >/dev/null && MNT=/automake || echo "" # Puppy
+
+if [ "x$MNT" == "x" ]; then
+	echo "Could not find free mountpoint"
+	exit 1
+fi
+
+if [ -f "$APPIMAGE" ] ; then # AppImage
+	[[ "$(file "$APPIMAGE")" =~ ELF.*executable.*\ interpreter ]] || { echo "Unknown AppImage file type"; exit 1; }
+
+	#RUNNABLE="/mnt/$(basename "$APPIMAGE")"
+	#sudo mount --bind "$APPIMAGE" "$MOUNTPOINT_UNION/$UNNABLE"
+	RUNNABLE="$(readlink -f "/$MNT/AppRun")"
+
+	if [[ "$(file -k "$APPIMAGE")" =~ ISO\ 9660\ CD-ROM ]]; then
+		echo "Mounting Type1 AppImage $APPIMAGE"
+		sudo mount -o loop "$APPIMAGE" "$MOUNTPOINT_UNION/$MNT"
+	else
+		OFFSET=$(./"$APPIMAGE" --appimage-offset)
+		[ "$OFFSET" -gt 0 ] || { echo "Could not find offset on $APPIMAGE"; exit 1; }
+		echo "Mounting Type2 AppImage $APPIMAGE with offset $OFFSET"
+		sudo mount -o loop "$APPIMAGE" "$MOUNTPOINT_UNION/$MNT" -o offset=$OFFSET
+	fi
+elif [ -d "$APPIMAGE" ] ; then # AppDir
+	echo "Mounting AppDir $APPIMAGE"
+	RUNNABLE="$(readlink -f "/$MNT/AppRun")"
+	sudo mount --bind "$APPIMAGE" "$MOUNTPOINT_UNION/$MNT"
+fi
+
+cat > "$MOUNTPOINT_UNION/run.sh" <<EOF
+#!/bin/sh
+
+export PATH=/bin:/usr/bin
+export HOME="/root" 
+export LANG="en_EN.UTF-8"
+# export QT_PLUGIN_PATH=./lib/qt4/plugins ###################### !!!
+
+cat /etc/*release
+echo ""
+
+rm -rf /etc/pango
+mkdir -p /etc/pango
+pango-querymodules > '/etc/pango/pango.modules' 2>/dev/null # otherwise only squares instead of text
+[ -f /si-chroot ] && ln -s /lib/ld-lsb.so.3 /lib/ld-linux.so.2
+
+echo "*** ldd "$MNT"/usr/{bin,lib}"
+LD_LIBRARY_PATH="$MNT/usr/lib:$MNT/lib/:$LD_LIBRARY_PATH" ldd "$MNT"/usr/{bin,lib}/* 2>/dev/null | grep "not found" | sort | uniq
+echo ""
+
+if [ "$opt_shell" ]; then
+	DIR="$(dirname "$RUNNABLE")"
+	echo "*** Opening shell on \${DIR}. Runnable is $(basename "$RUNNABLE")."
+	cd "\$DIR"
+	if [ -x /bin/bash ]; then /bin/bash
+	elif [ -x /bin/sh ]; then /bin/sh
+	else echo "No shell found"
+	fi
+else
+	echo "*** Running ${RUNNABLE}..."
+	./$RUNNABLE
+	echo "*** $RUNNABLE finished with exit code $?"
+fi
+EOF
+
+chmod a+x "$MOUNTPOINT_UNION/run.sh"
+sudo mount -t proc proc "$MOUNTPOINT_UNION/proc"
+sudo mount -t sysfs sys "$MOUNTPOINT_UNION/sys/"
+sudo mount --bind /dev "$MOUNTPOINT_UNION/dev"
+sudo mount --bind /dev/shm "$MOUNTPOINT_UNION/dev/shm"
+sudo mount -t devpts pts "$MOUNTPOINT_UNION/dev/pts"
+sudo mount --bind /var/run "$MOUNTPOINT_UNION/var/run" # pulse
+#sudo mount --bind /tmp "$MOUNTPOINT_UNION/tmp" # pulse
+sudo mount --bind /var/lib/dbus "$MOUNTPOINT_UNION/var/lib/dbus" # pulse (and more)
+sudo mkdir "$MOUNTPOINT_UNION/root/.pulse" # pulse
+sudo mount --bind ~/.pulse "$MOUNTPOINT_UNION/root/.pulse" # pulse
+sudo touch "$MOUNTPOINT_UNION/etc/resolv.conf" || echo ""
+sudo mount --bind /etc/resolv.conf "$MOUNTPOINT_UNION/etc/resolv.conf"
+xhost local: # otherwise "cannot open display: :0.0"
+
+echo
+echo "=== Entering chroot $MOUNTPOINT_UNION"
+echo
+sudo chroot "$MOUNTPOINT_UNION" /run.sh # $MNT/AppRun
+#cd "$MOUNTPOINT_UNION"
+#sudo systemd-nspawn
+echo
+echo "=== Leaving chroot"
+echo
+
+exit $?

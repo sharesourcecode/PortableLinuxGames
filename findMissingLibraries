@@ -1,0 +1,50 @@
+#!/bin/bash
+# Author : Ismael Barros² <ismael@barros2.org>
+# License : BSD http://en.wikipedia.org/wiki/BSD_license
+
+# This script is meant to be run inside an AppDir.
+# It will try to run the AppRun script with strace,
+# and detect which libraries are loaded in runtime.
+
+pg4l_dir=$(dirname $(readlink -f $0))
+. "$pg4l_dir/util.sh"
+
+opt_copy=
+bin=./AppRun
+while getopts "c" arg; do
+	case $arg in
+	c)
+		opt_copy=1
+		shift $((OPTIND-1))
+		;;
+      esac
+done
+
+bin="./AppRun"
+args=
+
+if [ -n "$1" ]; then
+	bin="$1"
+	shift
+	args=$@
+fi
+
+bin="$(readlink -f "$bin")"
+
+process() {
+	while read -r line; do
+		file=$(basename "$line")
+		if [ -f "usr/lib/$file" ]; then
+			echo -e "[${GOOD} existing ${NORMAL}]" $file
+		else
+			echo -e "[${BAD} missing ${NORMAL}]" $file
+
+			if [ "$opt_copy" ]; then
+				cp -v "$line" "usr/lib/"
+			fi
+		fi
+	done
+}
+
+export APPRUN_HELPERS="strace"
+"$bin" $args | egrep "open\(" | egrep -v ENOENT | egrep -v EACCESS | egrep -o "/usr/.*\\.so[^\"]*" | process

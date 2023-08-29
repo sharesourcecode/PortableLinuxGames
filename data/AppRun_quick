@@ -1,0 +1,33 @@
+#!/bin/bash
+# Author : Ismael Barros² <ismael@barros2.org>
+# License : BSD http://en.wikipedia.org/wiki/BSD_license
+
+export APPDIR="$(dirname "$(readlink -f "$0")")"
+export APPPKG="$(basename "$APPIMAGE")"
+LOGFILE=$(mktemp "/tmp/AppRun-log-${APPPKG}.XXXXXXXXXX")
+
+BINARY="$APPDIR/_BINARY_"
+BINARY_ARGS=
+
+. "$APPDIR/util.sh"
+
+# Uncomment this if the app needs relative paths specified on the command line
+#eval arguments="$(patch_relative_paths "$@")"
+#set -- "${arguments[@]}"
+
+export PATH="$APPDIR/usr/bin/:$PATH"
+
+[ -z "$*" ] && show_usage "$APPDIR/usage.txt"
+
+setup_keepResolution
+
+ret=0
+{
+	run_withLocalLibs "$BINARY" $BINARY_ARGS "$@"
+	ret=$?
+} 2>&1 | tee "$LOGFILE"
+
+[ $ret != 0 -a $ret != -1 ] && {
+	build_report "$LOGFILE" "$BINARY" > "${LOGFILE}.html"
+	xdg-open "${LOGFILE}.html" &
+}

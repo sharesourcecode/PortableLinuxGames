@@ -1,0 +1,39 @@
+#!/bin/bash
+# Author : Ismael Barros² <ismael@barros2.org>
+# License : BSD http://en.wikipedia.org/wiki/BSD_license
+
+pg4l_dir=$(dirname $(readlink -f $0))
+. "$pg4l_dir/util.sh"
+
+if [ -z "$*" ]; then
+	echo "Usage: $0 [binary]"
+	exit
+fi
+
+binary="$1"
+appName="${binary%.*}"
+appDir="$PWD"
+
+#appDir="${appName}.AppDir"
+#mkdir -p "$appDir" || exit 1
+#cp -av "$binary" "${appName}_Data" "$appDir" || exit 1
+#pushd "$appDir"
+
+cp -v "$pg4l_dir/data/AppRun_quick" AppRun || exit 1
+for i in AppRun.desktop AppRun.png util.sh; do
+	{ [ -f "$i" ] || cp -v "$pg4l_dir/data/$i" "$i"; } || exit 1
+done
+
+sed -e "s|_BINARY_|$binary|g" AppRun -i
+Suffix=-unity
+desktopFile_setParameter "AppRun.desktop" "Name" "$appName r1$suffix"
+desktopFile_setParameter "AppRun.desktop" "X-AppImage-Title" "$appName"
+desktopFile_setParameter "AppRun.desktop" "X-AppImage-Release" "1"
+desktopFile_setParameter "AppRun.desktop" "X-AppImage-ID" "$appName"
+desktopFile_setParameter "AppRun.desktop" "X-AppImage-Tags" "Unity"
+
+if [ -f *_Data/Resources/UnityPlayer.png ]; then
+	convert -resize 48x *_Data/Resources/UnityPlayer.png AppRun.png
+fi
+
+#popd

@@ -1,0 +1,47 @@
+#!/bin/bash
+# Author : Ismael Barros² <ismael@barros2.org>
+# License : BSD http://en.wikipedia.org/wiki/BSD_license
+
+pg4l_dir=$(dirname $(readlink -f $0))
+. "$pg4l_dir/util.sh"
+
+if [ -z "$*" ]; then
+	echo "Usage: $0 <short name> <Application.exe>"
+	exit
+fi
+
+
+
+TRIM=
+
+for i in $@; do
+	case $i in
+	#-trim) TRIM=1; shift ;; # TODO getopts
+	#-name) package=$i; shift ;; # TODO getopts
+	esac
+done
+
+bin=$1; shift
+wineUsrPath=$1; shift
+package=${package:-$(basename $bin .exe)}
+
+echo "Binary: $bin"
+echo "Package name: $package"
+
+cp -v "$pg4l_dir/data/AppRun_wine" AppRun || exit 1
+cp "$pg4l_dir/data/util.sh" . || exit 1
+for i in AppRun.desktop AppRun.png; do
+	{ [ -f "$i" ] || cp -v "$pg4l_dir/data/$i" "$i"; } || exit 1
+done
+
+if [ "$package" ]; then
+	sed -e "s|_WINEPREFIX_|\"\$HOME/.local/share/AppImage/${package}_wine\"|g" AppRun -i
+fi
+
+if [ "$bin" ]; then
+	sed -e "s|_BINARY_|$bin|g" AppRun -i
+
+	if [ "$TRIM" ]; then
+		"$pg4l_dir"/wineTrim "$bin" "$wineUsrPath"
+	fi
+fi

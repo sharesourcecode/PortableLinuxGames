@@ -1,0 +1,10 @@
+WINE REGISTRY Version 2
+;; All keys relative to \\Machine
+
+;; Avoid our Wine messing with the MIME associations
+;;[Software\\Microsoft\\Windows\\CurrentVersion\\RunServices]
+;;"winemenubuilder"="C:\\windows\\system32\\winemenubuilder.exe -r"
+
+;; Avoid our Wine messing with the system at all
+[HKEY_CURRENT_USER\Software\Wine\DllOverrides] 
+"winemenubuilder.exe"=""

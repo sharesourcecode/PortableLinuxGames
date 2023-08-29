@@ -1,0 +1,5 @@
+WINE REGISTRY Version 2
+;; All keys relative to \\User\\S-1-5-4
+
+[Software\\Wine\\Drivers] 1284387791
+"Audio"="alsa"

@@ -1,0 +1,83 @@
+#!/bin/bash
+# Author : Ismael Barros² <ismael@barros2.org>
+# License : BSD http://en.wikipedia.org/wiki/BSD_license
+
+EXCEPTIONS=libGL.so.1
+DESTINATION="$PWD/usr/lib/"
+
+
+findFiles() {
+	find "$DESTINATION" -iname "*.so"
+	find "$DESTINATION" -iname "*.so.*"
+	
+	for i in $@; do
+		[ -d "$i" ] && find "$i" -type f -perm /a+x
+		[ -f "$i" ] && echo "$i"
+	done
+}
+
+extractDependencies() {
+	#objdump -p "$@" 2>/dev/null | egrep NEEDED | awk '{ print $2 }' | grep -v "$PWD" | egrep "^/" | sort | uniq
+	LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$DESTINATION" ldd "$@" | grep "not found" | sort | uniq >&2
+	LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$DESTINATION" ldd "$@" 2>/dev/null | grep -v "not a dynamic executable" | grep -v "^\." | grep -v "$PWD" | cut -d" " -f3 | grep "^/" | sort | uniq
+}
+
+extractRuntimeDependencies() {
+	strings "$@" | egrep \\.so
+}
+
+
+
+mkdir -p "$DESTINATION"
+
+OIFS=$IFS
+NIFS=$'\n'
+IFS=$NIFS
+
+prev_libs=
+while true; do
+	files=$(findFiles "$@")
+	libs=$(extractDependencies $files)
+	#runlibs=$(extractRuntimeDependencies $@)
+
+	#if [ -n "$libs" ]; then
+		#echo "Libraries: $libs"
+	#fi
+
+	#if [ -n "$runlibs" ]; then
+		#echo "Runtime libraries: $runlibs"
+		#libs+=" $runlibs"
+	#fi
+
+	for i in $EXCEPTIONS; do
+		#echo "Ignoring $i"
+		#libs=${libs//$i/}
+		for j in $libs; do
+			[[ "$j" =~ "$i" ]] && {
+				echo "Ignoring $j"
+				libs=${libs//$j/}
+			}
+		done
+        done
+
+	for i in $libs; do
+		dest_lib=$DESTINATION/$(basename "$i")
+		if [ ! -f "$dest_lib" ]; then
+			if [ -f "$i" ]; then
+				cp -v "$i" "$dest_lib"
+				chmod +x "$dest_lib"
+			else
+				echo "!! Could not find dependency $i"
+			fi
+		fi
+	done
+
+	# If no new libraries have been found, break the loop
+	if [ "$prev_libs" = "$libs" ]; then
+		break;
+	fi
+
+	prev_libs=$libs
+done
+
+cp -v /lib/ld-linux.so.2 usr/lib/
